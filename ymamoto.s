@@ -12,6 +12,12 @@
 ;;; * add envelope-follow mode.
 ;;; * pitch affecting operations, like portamento and vibrato.
 ;;;
+;;; NOTES FOR CODE READERS:
+;;; 
+;;; * The implementations of arpeggio effects and software volume
+;;;   envelopes are almost identical; so if you find a bug in one,
+;;;   please look for that bug in the other. ;-)
+;;;
 
 ;;; CONSTANT SYMBOLS
 
@@ -65,8 +71,10 @@ channel_status_size = 16    ; I'd prefer to keep this a multiple of 4,
 
 	;; channel state bits
 channel_state_enabled = 0
-channel_state_tone = 1		; tentative
-channel_state_noise = 2		; tentative
+channel_state_tone = 1		; tentative;
+channel_state_noise = 2		; tentative;
+channel_state_env_follow = 3	; will change.
+
 
 ;;; FUNCTIONS
 
@@ -84,14 +92,14 @@ ymamoto_init:
 
 	;; Reset YM.
 	MOVEA.L #$FF8800, A1
-	MOVE.B #7, (A3)
-	MOVE.B #$FF, 2(A3)
-	MOVE.B #8, (A3)
-	MOVE.B #0, 2(A3)
-	MOVE.B #9, (A3)
-	MOVE.B #0, 2(A3)
-	MOVE.B #$A, (A3)
-	MOVE.B #0, 2(A3)
+	MOVE.B #7, (A1)
+	MOVE.B #$FF, 2(A1)
+	MOVE.B #8, (A1)
+	MOVE.B #0, 2(A1)
+	MOVE.B #9, (A1)
+	MOVE.B #0, 2(A1)
+	MOVE.B #$A, (A1)
+	MOVE.B #0, 2(A1)
 
 	;; FIXME verify that the supplied track is not out of bounds.
 
@@ -124,7 +132,7 @@ ymamoto_update:
 ;;; update_channel: expects the song data pointer in A0, and the channel
 ;;; index in D0.
 update_channel:
-	MOVEM.L D1-D3/A0-A3, -(A7) ; save registers
+	MOVEM.L D1-D3/A0-A4, -(A7) ; save registers
 
 	MOVE.L #$FF8800, A3
 
@@ -157,61 +165,57 @@ update_channel:
 
 
 	;; channel command
-	;; XXX: I think there are enough of these that we should just
-	;; use a jump table.
 	MOVE.W D1, D2
 	LSR.W #8, D2
 	AND.B #$3F, D2
-	BNE .arpeggio_command
-	;; XXX reserved
-	BRA .unknown_channel_command
+	CMP.B #command_jump_table_len, D2
+	BGE .unknown_channel_command ; valid entries from 0 to c_j_t_len-1.
+	LEA..command_jump_table, A4
+	LSL.B #2, D2
+	MOVEA.L (A4,D2), A4
+	JMP (A4)
+.command_jump_table:
+	;; 0 -> reserved.
+	DC.L .unknown_channel_command, .arpeggio_command
+	;; 2 -> detune (reserved).
+	DC.L .unknown_channel_command, .volume_command, .venv_command
+	;; 6 -> AM sample playback (reserved); 7 -> hard env (reserved).
+	DC.L .noise_command, .unknown_channel_command, .unknown_channel_command
+	DC.L .env_follow_command, .pitch_env_command, .slur_command
+	DC.L .vibrato_command
+command_jump_table_len = (*-.command_jump_table)/4
+
 .arpeggio_command:
-	CMP.B #1, D2
-	BNE .volume_command
 	;; if the arp value in D1 is 0, disable arpeggiation.
 	;; otherwise, set the arp bit in channel status.
 	MOVE.B D1, channel_arpeggio(A1)
 	MOVE.B #0, channel_arp_position(A1)
-
 	BRA .load_new_command
 
-	;; here: detune also
 .volume_command:
-	CMP.B #3, D2
-	BNE .venv_command
 	MOVE.B D1, channel_current_volume(A1)
 	BRA .load_new_command
 
 .venv_command:
-	CMP.B #4, D2
-	BNE .noise_command
+	MOVE.B D1, channel_volume_envelope(A1)
+	MOVE.B #0, channel_venv_position(A1)
 	BRA .load_new_command
 
 .noise_command:
-	CMP.B #5, D2
-	BNE .env_follow_command
 	BRA .load_new_command
 
 	;; 6 -> AM sample playback (reserved)
 	;; 7 -> hardware envelope (reserved)
 .env_follow_command:
-	CMP.B #8, D2
-	BNE .pitch_env_command
 	BRA .load_new_command
 
 .pitch_env_command:
-	CMP.B #9, D2
-	BNE .slur_command
 	BRA .load_new_command
 
 .slur_command:
-	CMP.B #10, D2
-	BNE. vibrato_command
 	BRA .load_new_command
 
 .vibrato_command:
-	CMP.B #11, D2
-	BNE .unknown_channel_command
 	BRA .load_new_command
 
 .unknown_channel_command:
@@ -247,7 +251,8 @@ update_channel:
 .trigger_command:
 	CMP.B #2, D2
 	BNE .unknown_global_command
-	;; XXX unimplemented
+	;; XXX unimplemented; just have to setup a vector to call on
+	;; this command, or similar.
 	BRA .load_new_command
 
 .unknown_global_command:
@@ -263,20 +268,13 @@ update_channel:
 	;; otherwise, we need to start playing a tone.
 	MOVE.B D2, channel_current_note(A1)
 	MOVE.B #0, channel_arp_position(A1) ; reset arpeggio.
-	MOVEQ #8, D3
-	ADD.B D0, D3
-	MOVE.B D3, (A3)
-	MOVE.B channel_current_volume(A1), D3
-	;; XXX:	should add in envelope state
-	MOVE.B D3, 2(A3)
-
+	MOVE.B #0, channel_venv_position(A1) ; reset volume envelope.
 	;; unmute this channel
 	MOVEQ #7, D3
 	MOVE.B D3, (A3)
 	MOVE.B (A3), D3
 	BCLR D0, D3
 	MOVE.B D3, 2(A3)
-
 	BRA .calculate_duration
 
 .special_note:
@@ -305,13 +303,14 @@ update_channel:
 	;; are processed.  Finally any other effects (venv, hard
 	;; envelope) are processed.
 .update_playing_note:
+	;; For consistency, this would be .lookup_note.
 	MOVE.B channel_current_note(A1), D3
 
-	;; Note value effects.
+	;;; Note value effects.
 
 .update_arpeggio:		; Arpeggios.
 	MOVE.B channel_arpeggio(A1), D1
-	BEQ .lookup_frequency
+	BEQ .lookup_frequency	; ... or next effect, if there is one.
 	MOVE.W song_data_arpeggio_pointer(A0), D2
 	ASL.W #2, D2
 	MOVE.W D2, A2
@@ -345,18 +344,18 @@ update_channel:
 	ADDQ #1, D2
 	MOVE.B D2, channel_arp_position(A1)
 
-	;; envelope follow mode would go here
+
+	;;; Frequency value effects.
 .lookup_frequency:
 	LEA note_to_ymval_xlate, A2
 	ADD.W D3,D3
 	MOVE.W (A2,D3), D3
 
-	;; Frequency value effects.
+.update_vibrato:
+	;; envelope follow mode would go here
+.update_hw_envelope:
 
 .set_frequency:
-	;; Could use MOVEP here, perhaps, to shorten this, except that
-	;; the YM shadow registers are gone on the Falcon, I've heard?
-	;; I'd appreciate someone filling me in on this.
 	MOVEQ #0, D1
 	ADD.B D0, D1
 	ADD.B D0, D1
@@ -370,14 +369,52 @@ update_channel:
 	MOVE.B D1, (A3)
 	MOVE.B D3, 2(A3)
 
-	;; Other effects.
-.other_effects:	
+
+	;; Volume effects.
+.lookup_volume:
+	MOVE.B channel_current_volume(A1), D3
+
 .update_venv:			; Soft volume envelope.
+	MOVE.B channel_volume_envelope(A1), D1
+	BEQ .set_volume		; ... or next effect, if there is one.
+	MOVE.W song_data_venv_pointer(A0), D2
+	ASL.W #2, D2
+	MOVE.W D2, A2
+	MOVE A0, D2
+	ADD.L D2, A2
+	CLR.L D2
+	ADDQ #1, A2		; Skip length of table.
+	;; Find our entry in the table.
+	SUBQ #1, D1
+	BEQ .venv_lookup_finished
+	SUBQ #1, D1
+.next_venv_entry:
+	MOVE.B (A2), D2
+	ADD #2, D2
+	ADD D2, A2
+	DBF D1, .next_venv_entry
+.venv_lookup_finished:
+	MOVE.B channel_venv_position(A1), D2
+	MOVE.B venv_length(A2), D1 ; Load length.
+	CMP.B D2, D1		   ; If position greater than length,
+	BGT .venv_update_note
+	MOVE.B venv_loop(A2), D2   ; ... reset to loop point.
+.venv_update_note:
+	MOVE.B venv_data(A2,D2), D3 ; Note that this might become
+	ADDQ #1, D2		    ; relative someday soon.
+	MOVE.B D2, channel_venv_position(A1)
+
+.set_volume:
+	MOVEQ #8, D1
+	ADD.B D0, D1
+	MOVE.B D1, (A3)
+	;; XXX:	should add in [hard]envelope state
+	MOVE.B D3, 2(A3)
 
 
 ;;; End of main playroutine.
 .end:	
-	MOVEM.L (A7)+, D1-D3/A0-A3 ; restore registers
+	MOVEM.L (A7)+, D1-D3/A0-A4 ; restore registers
 	RTS
 ;;;
 
