@@ -1,0 +1,139 @@
+
+ABOUT YMAMOTO
+
+YMamoto is my first attempt at a reasonable music playroutine for the
+Atari ST.  The design goal is to allow the production of interesting
+music; I considered adding efficiency of {memory usage, song size,
+cycles per frame} to the set of goals, but I decided that aiming at
+any of these things directly would just cripple the main goal, until I
+am more familiar with the ST and the YM.
+
+So, YMamoto, when finished, should be suitable at least for music
+disks and parts of demos where cycles aren't too scarce.
+
+
+USING YMAMOTO IN ANOTHER PROGRAM
+
+Call ymamoto_init with A0 pointing to the song data, and D0 set to the
+track index to play.
+
+Call ymamoto_update once per frame until it returns $FFFF in D0.
+
+FIXME: Eventually there will be a way for ymamoto to find out how
+frequently you're going to call it, and adjust tempo accordingly.
+Defaults to 50 Hz currently.
+
+FIXME: Eventually there will be a way to use trigger events to allow
+you to sync your effects to the music.
+
+
+FORMAT
+
+Song:
+	offset to track information
+	offset to pitch envelope information
+	offset to volume envelope information
+	offset to arpeggio table information
+	offset to pitch table information
+
+	number of tracks (short)
+	0	offset to track 0 (long, relative)
+	...
+	number of pitch envelopes (short)
+	0	offset to pitch envelope 0 (short, relative)
+	...
+	number of volume envelopes (short)
+	0	offset to volume envelope 0 (short, relative)
+
+
+Each track:
+	initial tempo (byte)
+	for each channel:
+		start point (short, relative)
+		loop point (short, relative)
+
+The tempo value is treated as a signed byte, and added to a base tempo
+of 140 beats per minute, giving a range of possible tempos from 12 BPM
+to 267 BPM.
+
+
+The two kinds of values possible in the channel data stream are notes
+and commands.  They can be determined by the value of their MSB, which
+is 0 for notes, and 1 for commands.
+
+Notes are stored in the following inefficient way:
+	0TDD Dddd rnnn nnnn
+		T => 1 = tied with next note
+		D => duration modifier:
+			000 => normal
+			001 => dotted
+			010 => double dotted
+			100 => triplet time
+			(quintuplet time?  duplet time?)
+		     NB that these may change from independant flags
+	             into a single, 8 state value.
+		d => duration, value from 0 (whole note) to 7 (128th note).
+		r => reserved (0).
+		n => tone, value from 0 = C0, 95 = B7.
+	             126 = wait, 127 = rest (wait, silence channel).
+		     Other values might be used for special purposes.
+
+Global commands: (can occur in any channel; need only occur once)
+	10rr rccc  xxxx xxxx
+		r => reserved.
+		c =>
+			000 => set global tempo
+every track must end  \	001 => track loop
+with one of these.    / 010 => track end
+                        011 => trigger external event
+		x => command data
+
+Channel commands:
+	11cc ccc  xxxx xxxx
+		set staccato
+		set detune
+		enable/disable noise
+		set noise frequency
+
+
+NOTES ON IMPROVING YMAMOTO
+
+Notes could be stored as being relative to a base octave (set with
+separate commands), just as their duration could be stored as being
+relative to a base duration.  This would probably allow encoding most
+note data as single bytes.  (Tone value would need no more than five
+bits, to encode +15/-16 tones; duration could be just two bits,
+allowing access to the four most common durations.)
+
+It could be interesting to provide a sort of voice scheduling system,
+which tried to fit ``optional'' voices in on channels when the regular
+voice was silent (due to rests or staccato).  Maybe this is better
+placed in the music composition tool, though.
+
+Obviously, a system for encoding loops and repeats would be good;
+especially something that took alternate endings into account, because
+that would seriously improve the value of repeats for a lot of my
+music.  Also, possibly a system based on windows (rather than
+"patterns" in the tracker sense) might be really handy for
+riff-oriented music.
+
+Being able to define ``instruments'' that allowed voices to rapidly
+switch a variety of characteristics at once, might save some time and
+space.  (An instrument might define a base range, default staccato,
+default volume envelope, default vibrato, et cetera.)
+
+Duration modifiers are probably very rarely used together (tied,
+double dotted triplets for example); they can probably turn into
+something state based (which would allow us to accomidate stranger
+timings, like quintuplets).
+
+An alternate approach to duration is to fix the atomic duration (one
+frame), and have the music creation tool do all the duration
+calculations.  This is good for some kinds of music, but it means that
+one cannot switch a song between 50 and 60 Hz replay without
+recompiling it.  We might go with this later, but for now I like the
+replay-speed independence of the current, less efficient format.
+
+We may need to increase the size of the relative offsets, though ``64k
+should be enough for anybody''; time will tell, as I write longer
+tunes.
