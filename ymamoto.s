@@ -8,9 +8,10 @@
 ;;; * check alignment of everything, make sure it's correct.
 ;;; * make sure the way we're unpacking relative >>2 pointers works
 ;;;   properly for large pointers.
-;;; * add volume envelopes.
-;;; * add envelope-follow mode.
-;;; * pitch affecting operations, like portamento and vibrato.
+;;; * add hw-envelope envelopes/macros.
+;;; * portamento/slur/glissando.
+;;; * noise support.
+;;; * AM sample support.
 ;;;
 ;;; NOTES FOR CODE READERS:
 ;;; 
@@ -59,8 +60,9 @@ vibrato_osc_mask = 4
 
 	;; song status structure
 song_current_track = 0
-song_pad = 1
-song_status_size = 2
+song_registers_to_write = 1
+song_ym_shadow = 2  ; to 15.. we don't touch the IO registers.
+song_status_size = 16
 
 	;; channel status structure
 channel_counter = 0
@@ -119,6 +121,14 @@ ymamoto_init:
 	LEA song_status, A1
 	MOVE.B D0, song_current_track(A1)
 
+	;; setup YM shadow registers.
+	MOVEQ #0, D1
+	MOVE.L D1, song_ym_shadow(A1)
+	MOVE.L D1, song_ym_shadow+4(A1)
+	MOVE.L D1, song_ym_shadow+8(A1)
+	MOVE.W D1, song_ym_shadow+12(A1)
+	MOVE.B #$FF, song_ym_shadow+7(A1) ; mixer.
+
 	;; setup each channel
 	MOVEQ #number_of_channels-1, D0
 .reset_channels:
@@ -132,21 +142,45 @@ ymamoto_init:
 
 ;;; ymamoto_update: call once per frame, a0 = song pointer.
 ymamoto_update:
+	MOVEM.L D0-D6/A0-A1, -(A7)
+	LEA song_status, A1
+	MOVE.B #14-1, song_registers_to_write(A1) ; 13-1 if we don't check
+                                                  ; envshape state.
+
 	MOVEQ #0, D0
 	JSR update_channel
 	MOVEQ #1, D0
 	JSR update_channel
 	MOVEQ #2, D0
 	JSR update_channel
+
+	MOVE.B song_registers_to_write(A1), D0
+	MOVEQ #0, D1
+	MOVEQ #0, D2
+	LEA song_ym_shadow(A1), A1
+	MOVEA.L #$FF8800, A0
+.write_ym_registers:
+	MOVE.B 0(A1,D1), D2
+	MOVE.B D1, (A0)
+	MOVE.B (A0), D3
+	CMP.B D3,D2
+	BEQ .next
+	MOVE.B D2, 2(A0)
+.next:	ADDQ #1, D1
+	DBF D0, .write_ym_registers
+
+	MOVEM.L (A7)+, D0-D6/A0-A1
 	RTS
 
 
 ;;; update_channel: expects the song data pointer in A0, and the channel
 ;;; index in D0.
 update_channel:
-	MOVEM.L D1-D4/A0-A4, -(A7) ; save registers
+	MOVEM.L A0-A4, -(A7)  ; save registers... don't bother with Dx
+			      ; because they're saved in ymamoto_update. 
 
-	MOVE.L #$FF8800, A3
+	LEA song_status, A1
+	LEA song_ym_shadow(A1), A3
 
 	;; load channel status ptr into A1
 	LEA channel_status, A1
@@ -253,11 +287,9 @@ command_jump_table_len = (*-.command_jump_table)/4
 	BNE .track_loop_command
 	;; This is a track end command ($8000).  Mute this channel, set
 	;; channel disable bit, and then end immediately.
-	MOVEQ #7, D2
-	MOVE.B D2, (A3)
-	MOVE.B (A3), D2
+	MOVE.B 7(A3), D2
 	BSET D0, D2
-	MOVE.B D2, 2(A3)
+	MOVE.B D2, 7(A3)
 	BCLR.B #channel_state_enabled, channel_state(A1)
 	BRA .end
 
@@ -297,11 +329,9 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.B #0, channel_venv_position(A1) ; reset volume envelope.
 	MOVE.W #0, channel_vibrato_position(A1)
 	;; unmute this channel
-	MOVEQ #7, D3
-	MOVE.B D3, (A3)
-	MOVE.B (A3), D3
+	MOVE.B 7(A3), D3
 	BCLR D0, D3
-	MOVE.B D3, 2(A3)
+	MOVE.B D3, 7(A3)
 	BRA .calculate_duration
 
 .special_note:
@@ -310,10 +340,9 @@ command_jump_table_len = (*-.command_jump_table)/4
 
 	BCLR.B #channel_state_tone, channel_state(A1)
 	MOVEQ #7, D2
-	MOVE.B D2, (A3)
-	MOVE.B (A3), D2
+	MOVE.B 7(A3), D2
 	BSET D0, D2		; Mute channel.
-	MOVE.B D2, 2(A3)
+	MOVE.B D2, 7(A3)
 
 .calculate_duration:
 	LSR.W #8, D1
@@ -381,8 +410,10 @@ command_jump_table_len = (*-.command_jump_table)/4
 	BMI .update_hw_envelope ; Next effect.
 
 	;; vibrato freq = ((frequency*2^1/12 - frequency)/2)/depth
-	;; Note that 1/(2^1/12) is pretty close to 16.
-	;; This can be approximated with (frequency>>4)/depth or so.
+	;; Note that 1/((2^1/12)-1) is pretty close to 16, so this can be
+	;; approximated with (frequency>>4)/depth or so.  Because this
+	;; value can get quite small, we represent the vibrato frequency
+	;; as a 12.4 fixed point fraction.
 	MOVE.W D3, D1
 	MOVEQ #8, D4
 	CMP.B vibrato_depth(A2), D4
@@ -392,29 +423,29 @@ command_jump_table_len = (*-.command_jump_table)/4
 	DIVU.W D4, D1		; divisor is (8-depth)*4.
 
 	;; low n bits of position are our oscillator. (This classic trick
-	;; stolen from Rob Hubbard!)
+	;; stolen from Rob Hubbard... except he used a fixed-frequency
+	;; oscillator.)
 .vibrato_oscillator:
 	MOVE.B vibrato_osc_mask(A2), D4
 	SUBQ #1, D4
-	AND.W D4, D2		; (2^speed)-1
+	AND.W D4, D2		; AND (2^speed)-1
 	ADDQ #1, D4
 	LSR.B #1, D4
-	CMP.B D4, D2		; 2^(speed-1)
+	CMP.B D4, D2		; CMP 2^(speed-1)
 	BCC .vo_l1
 	LSL.B #1, D4
 	SUBQ #1, D4
-	EOR.B D4, D2		; (2^speed)-1
-.vo_l1:	CMP.W #0, D2
-	BEQ .vo_l2
-	MOVE.W D1, D4
+	EOR.B D4, D2		; XOR (2^speed)-1
+
+.vo_l1:	MOVE.W D1, D4
 	MULU.W D2, D4		; Add vibrato frequency <oscillator> times.
-	LSR.L #4, D4		; Vibrato is a 12.4 fixed point fraction.
+	LSR.L #4, D4		; Fixup vibrato fraction.
 	SUB.W D4, D3
-.vo_l2:	MOVE.B vibrato_speed(A2), D4
-	SUB.B #1, D4
-	LSL.L D4, D1
-	LSR.L #4, D1		; Center the vibrato.  Might not be
-	ADD.W D1, D3		; necessary.
+
+	MOVE.B vibrato_speed(A2), D4
+	LSL.L D4, D1		; (frq << (speed-1)) >> 4... it's safe for
+	LSR.L #5, D1		; us to simplify this to (frq<<speed)>>5.
+	ADD.W D1, D3		; Center the vibrato.
 
 .update_hw_envelope:
 	BTST.B #channel_state_env_follow, channel_state(A1)
@@ -423,29 +454,26 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.B channel_env_shift(A1), D2
 	LSR.W D2, D1
 
-	MOVE.B #$B, (A3)	; Env fine adjustment.
-	MOVE.B D1, 2(A3)
-	MOVE.B #$C, (A3)	; Env rough adjustment.
+	MOVE.B D1, $B(A3)	; Env fine adjustment.
 	LSR.W #8, D1
-	MOVE.B D1, 2(A3)
+	MOVE.B D1, $C(A3)	; Env rough adjustment.
 	BTST.B #channel_state_first_frame, channel_state(A1)
 	BEQ .set_frequency	; only update on first frame of note.
-	MOVE.B #$D, (A3)	; Env shape.
-	MOVE.B #$8, 2(A3)	; CONT
+	MOVE.B #$E, $D(A3)	; Env shape: CONT|ATT|ALT
+	;LEA song_status, A2
+	;MOVE.B #14-1, song_registers_to_write(A2)
 
 .set_frequency:
 	MOVEQ #0, D1
 	ADD.B D0, D1
 	ADD.B D0, D1
-	MOVE.B D1, (A3)
-	MOVE.B D3, 2(A3)
+	MOVE.B D3, (A3,D1)
 
 	LSR.L #8, D3
 	MOVEQ #1, D1
 	ADD.B D0, D1
 	ADD.B D0, D1
-	MOVE.B D1, (A3)
-	MOVE.B D3, 2(A3)
+	MOVE.B D3, (A3,D1)
 
 
 	;; Volume effects.
@@ -468,19 +496,16 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.B D2, channel_venv_position(A1)
 
 .set_volume:
-	MOVEQ #8, D1
-	ADD.B D0, D1
-	MOVE.B D1, (A3)
 	BTST.B #channel_state_env_follow, channel_state(A1)
 	BEQ .store_volume
 	OR.B #$10, D3		; Envelope on.
 .store_volume:
-	MOVE.B D3, 2(A3)
+	MOVE.B D3, 8(A3,D0)
 
 
 ;;; End of main playroutine.
 .end:	
-	MOVEM.L (A7)+, D1-D4/A0-A4 ; restore registers
+	MOVEM.L (A7)+, A0-A4 ; restore registers
 	RTS
 ;;;
 
@@ -526,6 +551,7 @@ reset_channel:
 
 	MOVEM.L (A7)+, D0-D1/A0-A2 ; restore registers
 	RTS
+
 
 ;;; Generic routine for loading values from tables of form
 ;;; num_entries:byte

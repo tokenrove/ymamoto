@@ -14,10 +14,6 @@ am more familiar with the ST and the YM.
 So, YMamoto, when finished, should be suitable at least for music
 disks and parts of demos where cycles aren't too scarce.
 
-Things from the ST that I keep hearing about but am not familiar with:
-- buzzer/sync-buzzer bass?
-
-
 
 		   USING YMAMOTO IN ANOTHER PROGRAM
 
@@ -42,6 +38,7 @@ SONG
 
 pointer to arpeggio table (word, relative, >>2)
 pointer to volume envelope table (word, relative, >>2)
+pointer to vibrato table (word, relative, >>2)
 number of tracks (byte)
 	Should always be >1.
 offset to track 0 (word, relative, >>2)
@@ -104,19 +101,28 @@ Channel commands:
 		o = one octave lower/same pitch.
 	1100 1001 pppp pppp
 		pitch envelope.  0 = disable pitch envelope.
-	1100 1010
-		slur to next note.
+	1100 1010 ssss ssss
+		portamento.  s = speed.
 	1100 1011 vvvv vvvv
 		vibrato.  0 = disable vibrato.
 
 
 Arpeggio and venv tables: (long aligned)
 
-number of entries in table (byte, <254)
+number of entries in table (byte)
 entry 1 length (byte)
 entry 1 loop point (byte)
 entry 1 data (length*byte)
 ...
+
+Vibrato table: (long aligned)
+
+number of entries in table (byte)
+entry 1 "length" (byte, always 3)
+entry 1 delay (byte)
+entry 1 depth (byte, 0 through 8)
+entry 1 speed (byte, 0 through 4)
+entry 1 oscillator mask (byte, 1<<speed)
 
 
 
@@ -124,13 +130,9 @@ entry 1 data (length*byte)
 
 ENVELOPES
 
-I'm going to initially provide an ``envelope-follow mode'' that causes
-the envelope frequency to be set to the frequency of the current note
-on the channel, or an octave below, or a perfect fifth below.  We'll
-see how that works out.
-
 It might be nice to provide a means for sweeping the envelope, perhaps
-by a table driven method like arpeggios and vibratos.
+by a table driven method like arpeggios and vibratos.  Also, changing
+the shape on the fly, perhaps even with a separation timer.
 
 STORAGE
 
@@ -163,9 +165,10 @@ We may need to increase the size of the relative offsets, though ``64k
 should be enough for anybody''; time will tell, as I write longer
 tunes.
 
-Arpeggios could be stored aligned on 8 byte boundries, to make seeking
-into the arp table very quick.  For arpeggios longer than 8 bytes, you
-could just have ``double wide'' arpeggios that take up 16 bytes.
+Arpeggios (and other tables) could be stored aligned on 8 byte
+boundries, to make seeking into the arp table very quick.  For
+arpeggios longer than 8 bytes, you could just have ``double wide''
+arpeggios that take up 16 bytes.
 
 DURATIONS
 
