@@ -66,6 +66,7 @@ channel_volume_envelope = 11
 channel_venv_position = 12
 channel_pitch_envelope = 13
 channel_pitchenv_position = 14
+channel_env_shift = 15
 channel_status_size = 16    ; I'd prefer to keep this a multiple of 4,
                             ; for easy wiping of the structure.
 
@@ -204,9 +205,17 @@ command_jump_table_len = (*-.command_jump_table)/4
 .noise_command:
 	BRA .load_new_command
 
-	;; 6 -> AM sample playback (reserved)
-	;; 7 -> hardware envelope (reserved)
 .env_follow_command:
+	BTST.B #0, D1
+	BEQ .disable_env_follow
+	BSET.B #channel_state_env_follow, channel_state(A1)
+	MOVE.B #4, channel_env_shift(A1) ; should be /16 by default.
+	BTST.B #1, D1
+	BEQ .load_new_command
+	SUB.B #1, channel_env_shift(A1)	; Follow one octave lower.
+	BRA .load_new_command
+.disable_env_follow:
+	BCLR.B #channel_state_env_follow, channel_state(A1)
 	BRA .load_new_command
 
 .pitch_env_command:
@@ -354,6 +363,19 @@ command_jump_table_len = (*-.command_jump_table)/4
 .update_vibrato:
 	;; envelope follow mode would go here
 .update_hw_envelope:
+	BTST.B #channel_state_env_follow, channel_state(A1)
+	BEQ .set_frequency	; ... or next effect.
+	MOVE.W D3, D1		; D1 <- current frequency.
+	MOVE.B channel_env_shift(A1), D2
+	LSR.W D2, D1
+
+	MOVE.B #$B, (A3)	; Env fine adjustment.
+	MOVE.B D1, 2(A3)
+	MOVE.B #$C, (A3)	; Env rough adjustment.
+	LSR.W #8, D1
+	MOVE.B D1, 2(A3)
+	MOVE.B #$D, (A3)	; Env shape.
+	MOVE.B #$D, 2(A3)	; CONT|ALT
 
 .set_frequency:
 	MOVEQ #0, D1
@@ -408,7 +430,10 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVEQ #8, D1
 	ADD.B D0, D1
 	MOVE.B D1, (A3)
-	;; XXX:	should add in [hard]envelope state
+	BTST.B #channel_state_env_follow, channel_state(A1)
+	BEQ .store_volume
+	OR.B #$10, D3		; Envelope on.
+.store_volume:
 	MOVE.B D3, 2(A3)
 
 
