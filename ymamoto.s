@@ -4,6 +4,12 @@
 ;;;
 ;;; See the README file for the broad strokes.
 ;;;
+;;; TODO NEXT:
+;;; * check alignment of everything, make sure it's correct.
+;;; * add volume envelopes.
+;;; * add envelope-follow mode.
+;;; * pitch affecting operations, like portamento and vibrato.
+;;;
 
 ;;; CONSTANT SYMBOLS
 
@@ -189,36 +195,18 @@ update_channel:
 	;; otherwise, we need to start playing a tone.
 	MOVE.B D2, channel_current_note(A1)
 	MOVE.B #0, channel_arp_position(A1) ; reset arpeggio.
-	MOVEM.L D1/A1, -(A7)
-	LEA note_to_ymval_xlate, A1
-	LSL.B #1, D2
-	MOVE.W (A1,D2), D2
-	MOVEQ #0, D1
-	ADD.B D0, D1
-	ADD.B D0, D1
-	MOVE.B D1, (A3)
-	MOVE.B D2, 2(A3)
-
-	LSR.L #8, D2
-	MOVEQ #1, D1
-	ADD.B D0, D1
-	ADD.B D0, D1
-	MOVE.B D1, (A3)
-	MOVE.B D2, 2(A3)
-
-	MOVEQ #8, D1
-	ADD.B D0, D1
-	MOVE.B D1, (A3)
+	MOVEQ #8, D3
+	ADD.B D0, D3
+	MOVE.B D3, (A3)
 	MOVE.B #$08, 2(A3)
 
 	;; unmute this channel
-	MOVEQ #7, D1
-	MOVE.B D1, (A3)
-	MOVE.B (A3), D1
-	BCLR D0, D1
-	MOVE.B D1, 2(A3)
+	MOVEQ #7, D3
+	MOVE.B D3, (A3)
+	MOVE.B (A3), D3
+	BCLR D0, D3
+	MOVE.B D3, 2(A3)
 
-	MOVEM.L (A7)+, D1/A1
 	BRA .calculate_duration
 
 .special_note:
@@ -288,12 +276,15 @@ update_channel:
 	;; envelope follow mode would go here
 .lookup_frequency:
 	LEA note_to_ymval_xlate, A2
-	LSL.B #1, D3
+	ADD.W D3,D3
 	MOVE.W (A2,D3), D3
 
 	;; Frequency value effects.
 
 .set_frequency:
+	;; Could use MOVEP here, perhaps, to shorten this, except that
+	;; the YM shadow registers are gone on the Falcon, I've heard?
+	;; I'd appreciate someone filling me in on this.
 	MOVEQ #0, D1
 	ADD.B D0, D1
 	ADD.B D0, D1
