@@ -26,40 +26,36 @@ track index to play.
 
 Call ymamoto_update once per frame until it returns $FFFF in D0.
 
-FIXME: Eventually there will be a way for ymamoto to find out how
-frequently you're going to call it, and adjust tempo accordingly.
-Defaults to 50 Hz currently.  (See constants in source to change this)
-
 FIXME: Eventually there will be a way to use trigger events to allow
 you to sync your effects to the music.
 
 
 			 YMAMOTO DATA FORMAT
 
+All relative pointers are to long aligned addresses, and hence the
+pointers are stored as shorts, and shifted left two bits to get the
+actual address.  These pointers are relative to the beginning of the
+song data, not their current position, and are always forward
+references, so they don't get sign extended when loaded from words.
+
 SONG
 
-pointer to arpeggio table
-pointer to volume envelope table
-number of tracks (short)
-offset to track 0 (long, relative)
+pointer to arpeggio table (word, relative, >>2)
+pointer to volume envelope table (word, relative, >>2)
+number of tracks (byte)
+	Should always be >1.
+offset to track 0 (word, relative, >>2)
+offset to track ...
 
 
-TRACK
+TRACK (long aligned)
 
-channel A start point (short, relative)
-channel B start point (short, relative)
-channel C start point (short, relative)
-channel A loop point (short, relative)
-channel B loop point (short, relative)
-channel C loop point (short, relative)
-initial tempo (byte)
-
-The tempo value is treated as a signed byte, and added to a base tempo
-of 140 beats per minute, giving a range of possible tempos from 12 BPM
-to 267 BPM.
+channel A start point (word, relative, >>2)
+channel B start point (word, relative, >>2)
+channel C start point (word, relative, >>2)
 
 
-CHANNEL DATA STREAM
+CHANNEL DATA STREAM (long aligned)
 
 The two kinds of values possible in the channel data stream are notes
 and commands.  They can be determined by the value of their MSB, which
@@ -87,23 +83,42 @@ Channel commands:
 	11cc cccc xxxx xxxx
 
 	1100 0001 aaaa aaaa
-		Set arpeggio.  0 = disable arpeggio.
-
-		set staccato
+		arpeggio.  0 = disable arpeggio.
+	1100 0010 xxxx xxxx
 		set detune
+	1100 0011 xxxx vvvv
 		set fixed volume
-		set software volume envelope
-		enable/disable noise
-		set noise frequency
-		set envelope
-		envelope-follow mode
+	1100 0100 eeee eeee
+		set software volume envelope.
+		0 = disable soft envelope.
+	1100 0101 nnnn nnnn
+		enable/disable noise.
+		n = noise frequency, 0 to disable.
+	1100 0110 xxxx xxxx
+		AM sample playback [reserved.]
+	1100 0111 <envelope bytes would follow>
+		set hardware envelope [reserved.]
+	1100 1000 xxxx xxoe
+		envelope-follow mode.
+		e = enable/disable;
+		o = one octave lower/same pitch.
+	1100 1001 pppp pppp
+		pitch envelope.  0 = disable pitch envelope.
+	1100 1010
+		slur to next note.
+	1100 1011 dddd ssss
+		vibrato.
+		d = depth; s = speed.
 
 
-Arpeggio table:
+Arpeggio and venv tables: (long aligned)
 
-	byte	number of arps in table (no more than 254!)
+number of entries in table (byte, <254)
+entry 1 length (byte)
+entry 1 loop point (byte)
+entry 1 data (length*byte)
+...
 
-Each arp definition is length, loop point, and data.
 
 
 		      NOTES ON IMPROVING YMAMOTO
@@ -122,7 +137,9 @@ STORAGE
 
 I think I'm going to rewrite this as a byte-oriented format.  Word
 orientation seems to waste more than it gains (marginal theoretical
-speed improvements).
+speed improvements).  Also, I've been reading Rob Hubbard's replays
+lately, as well as various others, and I like some of his approaches a
+lot.
 
 Notes could be stored as being relative to a base octave (set with
 separate commands), just as their duration could be stored as being

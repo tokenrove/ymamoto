@@ -6,6 +6,8 @@
 ;;;
 ;;; TODO NEXT:
 ;;; * check alignment of everything, make sure it's correct.
+;;; * make sure the way we're unpacking relative >>2 pointers works
+;;;   properly for large pointers.
 ;;; * add volume envelopes.
 ;;; * add envelope-follow mode.
 ;;; * pitch affecting operations, like portamento and vibrato.
@@ -16,34 +18,55 @@
 number_of_channels = 3
 ;;; This playback /was/ dependant on this value, but now all durations
 ;;; are fixed cycles, so to change this, you should really just
-;;; recompile the songs with mumble.
+;;; recompile the songs with mumble.  I don't think there's any reason
+;;; this is here anymore, except to provide something to attach to
+;;; this historical note.
 playback_frequency = 50		; Hertz
 
 	;; song data structure
 song_data_arpeggio_pointer = 0
-song_data_venv_pointer = 4
-song_data_number_of_tracks = 8
-song_data_track_ptrs = 9
+song_data_venv_pointer = 2
+song_data_number_of_tracks = 4
+song_data_pad = 5
+song_data_track_ptrs = 6
 
-	;; track data structure
-track_data_channel_ptrs = 0
+	;; track data structure; repeats for each channel.
+track_data_channel_ptr = 0
 
 	;; arpeggio table structure
 arpeggio_length = 0
 arpeggio_loop = 1
 arpeggio_data = 2
-	
+
+	;; volume envelope table structure
+venv_length = 0
+venv_loop = 1
+venv_data = 2
+
 	;; song status structure
 song_current_track = 0
-song_status_size = 1
+song_pad = 1
+song_status_size = 2
 
 	;; channel status structure
 channel_counter = 0
 channel_data_ptr = 2
-channel_arpeggio = 6
-channel_arp_position = 7
-channel_current_note = 8
-channel_status_size = 9
+channel_state = 6
+channel_arpeggio = 7
+channel_arp_position = 8
+channel_current_note = 9
+channel_current_volume = 10
+channel_volume_envelope = 11
+channel_venv_position = 12
+channel_pitch_envelope = 13
+channel_pitchenv_position = 14
+channel_status_size = 16    ; I'd prefer to keep this a multiple of 4,
+                            ; for easy wiping of the structure.
+
+	;; channel state bits
+channel_state_enabled = 0
+channel_state_tone = 1		; tentative
+channel_state_noise = 2		; tentative
 
 ;;; FUNCTIONS
 
@@ -75,23 +98,12 @@ ymamoto_init:
 	;; setup pointers: channels for this track, tables.
 	LEA song_status, A1
 	MOVE.B D0, song_current_track(A1)
-	SUBQ.W #1, D0		; (track_no - 1)*4 = offset in
-	LSL.W #2, D0		; pointer table.
-	MOVEA.L A0, A2
-	ADD.L song_data_track_ptrs(A0,D0), A2 ; ptr relative to song data.
 
 	;; setup each channel
-	LEA channel_status, A1
-	LEA.L track_data_channel_ptrs(A2), A2
-	MOVEQ #number_of_channels-1, D1
-	MOVE.L A0,D0
-.reset_channel:
-	CLR channel_counter(A1)
-	MOVE.L (A2)+, channel_data_ptr(A1)
-	ADD.L D0, channel_data_ptr(A1) ; Make relative ptr absolute.
-	MOVE.B #0, channel_arpeggio(A1)
-	ADD #channel_status_size, A1
-	DBF D1, .reset_channel
+	MOVEQ #number_of_channels-1, D0
+.reset_channels:
+	BSR reset_channel
+	DBF D0, .reset_channels
 
 .end:	
 	MOVEM.L (A7)+, D0-D1/A0-A2
@@ -125,6 +137,9 @@ update_channel:
 	ADD #channel_status_size, A1
 	DBEQ D1, .next_channel_status
 .channel_status_loaded:
+
+	BTST.B #channel_state_enabled, channel_state(A1)
+	BEQ .end
 
 	;; decrement and check counter
 	SUBQ.W #1, channel_counter(A1)
@@ -161,23 +176,31 @@ update_channel:
 
 .global_command:
 	MOVE.W D1, D2
-	LSR.W #8, D2
 	AND.B #$7F, D2
 	BNE .track_loop_command
-	;; this is a track end command ($8000).  Update the data pointer
-	;; to point to this command, and then end immediately.
-	SUBQ #2, A2
-	MOVE.L A2, channel_data_ptr(A1)
+	;; This is a track end command ($8000).  Mute this channel, set
+	;; channel disable bit, and then end immediately.
+	MOVEQ #7, D2
+	MOVE.B D2, (A3)
+	MOVE.B (A3), D2
+	BSET D0, D2
+	MOVE.B D2, 2(A3)
+	BCLR.B #channel_state_enabled, channel_state(A1)
 	BRA .end
 
 .track_loop_command:
-	CMP #1, D2
+	CMP.B #1, D2
 	BNE .trigger_command
-	;; XXX unimplemented
+	BSR reset_channel
+	MOVEQ #0, D2
+	MOVE.W (A2)+, D2
+	ADD.W D2, D2
+	ADD.L D2, channel_data_ptr(A1)
+	MOVEA.L channel_data_ptr(A1), A2
 	BRA .load_new_command
 
 .trigger_command:
-	CMP #2, D2
+	CMP.B #2, D2
 	BNE .unknown_global_command
 	;; XXX unimplemented
 	BRA .load_new_command
@@ -198,7 +221,7 @@ update_channel:
 	MOVEQ #8, D3
 	ADD.B D0, D3
 	MOVE.B D3, (A3)
-	MOVE.B #$08, 2(A3)
+	MOVE.B #$0C, 2(A3)	; volume C
 
 	;; unmute this channel
 	MOVEQ #7, D3
@@ -242,7 +265,9 @@ update_channel:
 .update_arpeggio:		; Arpeggios.
 	MOVE.B channel_arpeggio(A1), D1
 	BEQ .lookup_frequency
-	MOVE.L song_data_arpeggio_pointer(A0), A2
+	MOVE.W song_data_arpeggio_pointer(A0), D2
+	ASL.W #2, D2
+	MOVE.W D2, A2
 	MOVE A0, D2
 	ADD.L D2, A2
 	CLR.L D2
@@ -310,8 +335,50 @@ update_channel:
 ;;;
 
 
-;;; CONSTANT TABLES
+	;; Takes D0 = channel number, A0 = song ptr.
+reset_channel:
+	MOVEM.L D0-D1/A0-A2, -(A7) ; save registers
 
+	;; load appropriate track address.
+	LEA song_status, A1
+	MOVEQ #0, D1
+	MOVE.B song_current_track(A1), D1
+	SUBQ.W #1, D1
+	LSL.B #1, D1
+	MOVE.W song_data_track_ptrs(A0,D1), D1
+	ASL.W #2, D1		; XXX: should be .L?
+	LEA.L track_data_channel_ptr(A0,D1), A2
+
+	;; load appropriate channel status structure.
+	LEA channel_status, A1
+.l1:	CMP #0, D0
+	BEQ .l2
+	ADD #channel_status_size, A1 ; next channel status.
+	ADD #2, A2		; next channel pointer.
+	DBF D0, .l1
+.l2:
+
+	;; wipe channel status structure first.
+	MOVE.L D0, 0(A1)
+	MOVE.L D0, 4(A1)
+	MOVE.L D0, 8(A1)
+	MOVE.L D0, 12(A1)
+
+	;; setup data pointer.
+	MOVE.W (A2), D0
+	ASL.W #2, D0
+	ADD.L A0, D0
+	MOVE.L D0, channel_data_ptr(A1)
+
+	;; enable channel.
+	BSET.B #channel_state_enabled, channel_state(A1)
+
+	MOVEM.L (A7)+, D0-D1/A0-A2 ; restore registers
+	RTS
+
+
+;;; CONSTANT TABLES
+	ALIGN 2
 note_to_ymval_xlate:
 	DC.W $EEE,$E18,$D4D,$C8E,$BDA,$B2F,$A8F,$9F7,$968,$8E1,$861,$7E9
 	DC.W $777,$70C,$6A7,$647,$5ED,$598,$547,$4FC,$4B4,$470,$431,$3F4
@@ -326,7 +393,7 @@ note_to_ymval_xlate:
 ;;; GLOBAL VARIABLES
 	BSS
 
-song_status:	DS.L song_status_size
-channel_status:	DS.L channel_status_size*number_of_channels
+song_status:	DS.B song_status_size
+channel_status:	DS.B channel_status_size*number_of_channels
 
 ;;; EOF
