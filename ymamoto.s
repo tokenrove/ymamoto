@@ -32,9 +32,10 @@ playback_frequency = 50		; Hertz
 	;; song data structure
 song_data_arpeggio_pointer = 0
 song_data_venv_pointer = 2
-song_data_number_of_tracks = 4
-song_data_pad = 5
-song_data_track_ptrs = 6
+song_data_vibrato_pointer = 4
+song_data_pad = 6
+song_data_number_of_tracks = 7
+song_data_track_ptrs = 8
 
 	;; track data structure; repeats for each channel.
 track_data_channel_ptr = 0
@@ -48,6 +49,13 @@ arpeggio_data = 2
 venv_length = 0
 venv_loop = 1
 venv_data = 2
+
+	;; vibrato table structure
+vibrato_length = 0		; not really necessary, but...
+vibrato_delay = 1
+vibrato_depth = 2
+vibrato_speed = 3
+vibrato_osc_mask = 4
 
 	;; song status structure
 song_current_track = 0
@@ -67,14 +75,17 @@ channel_venv_position = 12
 channel_pitch_envelope = 13
 channel_pitchenv_position = 14
 channel_env_shift = 15
-channel_status_size = 16    ; I'd prefer to keep this a multiple of 4,
+channel_vibrato_position = 16	; and 17
+channel_vibrato = 18
+channel_status_size = 20    ; I'd prefer to keep this a multiple of 4,
                             ; for easy wiping of the structure.
 
 	;; channel state bits
 channel_state_enabled = 0
 channel_state_tone = 1		; tentative;
 channel_state_noise = 2		; tentative;
-channel_state_env_follow = 3	; will change.
+channel_state_env_follow = 3	; will change;
+channel_state_first_frame = 4	; tentative.
 
 
 ;;; FUNCTIONS
@@ -133,7 +144,7 @@ ymamoto_update:
 ;;; update_channel: expects the song data pointer in A0, and the channel
 ;;; index in D0.
 update_channel:
-	MOVEM.L D1-D3/A0-A4, -(A7) ; save registers
+	MOVEM.L D1-D4/A0-A4, -(A7) ; save registers
 
 	MOVE.L #$FF8800, A3
 
@@ -149,6 +160,8 @@ update_channel:
 
 	BTST.B #channel_state_enabled, channel_state(A1)
 	BEQ .end
+
+	BCLR.B #channel_state_first_frame, channel_state(A1)
 
 	;; decrement and check counter
 	SUBQ.W #1, channel_counter(A1)
@@ -225,6 +238,8 @@ command_jump_table_len = (*-.command_jump_table)/4
 	BRA .load_new_command
 
 .vibrato_command:
+	MOVE.B D1, channel_vibrato(A1)
+	MOVE.W #0, channel_vibrato_position(A1)
 	BRA .load_new_command
 
 .unknown_channel_command:
@@ -275,9 +290,12 @@ command_jump_table_len = (*-.command_jump_table)/4
 	CMPI.B #95, D2
 	BGT .special_note
 	;; otherwise, we need to start playing a tone.
+	BSET.B #channel_state_first_frame, channel_state(A1)
+	BSET.B #channel_state_tone, channel_state(A1)
 	MOVE.B D2, channel_current_note(A1)
 	MOVE.B #0, channel_arp_position(A1) ; reset arpeggio.
 	MOVE.B #0, channel_venv_position(A1) ; reset volume envelope.
+	MOVE.W #0, channel_vibrato_position(A1)
 	;; unmute this channel
 	MOVEQ #7, D3
 	MOVE.B D3, (A3)
@@ -289,11 +307,12 @@ command_jump_table_len = (*-.command_jump_table)/4
 .special_note:
 	CMPI.B #126, D2		; Is it a wait (as opposed to a rest)?
 	BEQ .calculate_duration
-	;; Read current mixer setting and mute.
+
+	BCLR.B #channel_state_tone, channel_state(A1)
 	MOVEQ #7, D2
 	MOVE.B D2, (A3)
 	MOVE.B (A3), D2
-	BSET D0, D2
+	BSET D0, D2		; Mute channel.
 	MOVE.B D2, 2(A3)
 
 .calculate_duration:
@@ -312,8 +331,10 @@ command_jump_table_len = (*-.command_jump_table)/4
 	;; are processed.  Finally any other effects (venv, hard
 	;; envelope) are processed.
 .update_playing_note:
-	;; For consistency, this would be .lookup_note.
+	BTST.B #channel_state_tone, channel_state(A1)
+	BEQ .end
 	MOVE.B channel_current_note(A1), D3
+	MOVEQ #0, D1
 
 	;;; Note value effects.
 
@@ -321,22 +342,7 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.B channel_arpeggio(A1), D1
 	BEQ .lookup_frequency	; ... or next effect, if there is one.
 	MOVE.W song_data_arpeggio_pointer(A0), D2
-	ASL.W #2, D2
-	MOVE.W D2, A2
-	MOVE A0, D2
-	ADD.L D2, A2
-	CLR.L D2
-	ADDQ #1, A2		; skip length of table.
-	;; find our entry in the table.
-	SUBQ #1, D1
-	BEQ .arp_lookup_finished
-	SUBQ #1, D1
-.next_arp_entry:
-	MOVE.B (A2), D2
-	ADD #2, D2
-	ADD D2, A2
-	DBF D1, .next_arp_entry
-.arp_lookup_finished:
+	BSR load_table_entry
 	MOVE.B channel_arp_position(A1), D2
 	;; load length; if arp position greater than length,
 	;; reset to loop point.
@@ -361,7 +367,55 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.W (A2,D3), D3
 
 .update_vibrato:
-	;; envelope follow mode would go here
+	MOVE.B channel_vibrato(A1), D1
+	BEQ .update_hw_envelope
+	MOVE.W song_data_vibrato_pointer(A0), D2
+	BSR load_table_entry
+	;; always update position
+	ADD.W #1, channel_vibrato_position(A1)
+	MOVE.W channel_vibrato_position(A1), D2
+
+	MOVEQ #0, D4
+	MOVE.B vibrato_delay(A2), D4
+	SUB.W D4, D2
+	BMI .update_hw_envelope ; Next effect.
+
+	;; vibrato freq = ((frequency*2^1/12 - frequency)/2)/depth
+	;; Note that 1/(2^1/12) is pretty close to 16.
+	;; This can be approximated with (frequency>>4)/depth or so.
+	MOVE.W D3, D1
+	MOVEQ #8, D4
+	CMP.B vibrato_depth(A2), D4
+	BEQ .vibrato_oscillator
+	SUB.B vibrato_depth(A2), D4 ; Could replace this division with
+	LSL.B #2, D4		; something more clever -- note that the
+	DIVU.W D4, D1		; divisor is (8-depth)*4.
+
+	;; low n bits of position are our oscillator. (This classic trick
+	;; stolen from Rob Hubbard!)
+.vibrato_oscillator:
+	MOVE.B vibrato_osc_mask(A2), D4
+	SUBQ #1, D4
+	AND.W D4, D2		; (2^speed)-1
+	ADDQ #1, D4
+	LSR.B #1, D4
+	CMP.B D4, D2		; 2^(speed-1)
+	BCC .vo_l1
+	LSL.B #1, D4
+	SUBQ #1, D4
+	EOR.B D4, D2		; (2^speed)-1
+.vo_l1:	CMP.W #0, D2
+	BEQ .vo_l2
+	MOVE.W D1, D4
+	MULU.W D2, D4		; Add vibrato frequency <oscillator> times.
+	LSR.L #4, D4		; Vibrato is a 12.4 fixed point fraction.
+	SUB.W D4, D3
+.vo_l2:	MOVE.B vibrato_speed(A2), D4
+	SUB.B #1, D4
+	LSL.L D4, D1
+	LSR.L #4, D1		; Center the vibrato.  Might not be
+	ADD.W D1, D3		; necessary.
+
 .update_hw_envelope:
 	BTST.B #channel_state_env_follow, channel_state(A1)
 	BEQ .set_frequency	; ... or next effect.
@@ -374,8 +428,10 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.B #$C, (A3)	; Env rough adjustment.
 	LSR.W #8, D1
 	MOVE.B D1, 2(A3)
+	BTST.B #channel_state_first_frame, channel_state(A1)
+	BEQ .set_frequency	; only update on first frame of note.
 	MOVE.B #$D, (A3)	; Env shape.
-	MOVE.B #$D, 2(A3)	; CONT|ALT
+	MOVE.B #$8, 2(A3)	; CONT
 
 .set_frequency:
 	MOVEQ #0, D1
@@ -400,22 +456,7 @@ command_jump_table_len = (*-.command_jump_table)/4
 	MOVE.B channel_volume_envelope(A1), D1
 	BEQ .set_volume		; ... or next effect, if there is one.
 	MOVE.W song_data_venv_pointer(A0), D2
-	ASL.W #2, D2
-	MOVE.W D2, A2
-	MOVE A0, D2
-	ADD.L D2, A2
-	CLR.L D2
-	ADDQ #1, A2		; Skip length of table.
-	;; Find our entry in the table.
-	SUBQ #1, D1
-	BEQ .venv_lookup_finished
-	SUBQ #1, D1
-.next_venv_entry:
-	MOVE.B (A2), D2
-	ADD #2, D2
-	ADD D2, A2
-	DBF D1, .next_venv_entry
-.venv_lookup_finished:
+	BSR load_table_entry
 	MOVE.B channel_venv_position(A1), D2
 	MOVE.B venv_length(A2), D1 ; Load length.
 	CMP.B D2, D1		   ; If position greater than length,
@@ -439,7 +480,7 @@ command_jump_table_len = (*-.command_jump_table)/4
 
 ;;; End of main playroutine.
 .end:	
-	MOVEM.L (A7)+, D1-D3/A0-A4 ; restore registers
+	MOVEM.L (A7)+, D1-D4/A0-A4 ; restore registers
 	RTS
 ;;;
 
@@ -472,6 +513,7 @@ reset_channel:
 	MOVE.L D0, 4(A1)
 	MOVE.L D0, 8(A1)
 	MOVE.L D0, 12(A1)
+	MOVE.L D0, 16(A1)
 
 	;; setup data pointer.
 	MOVE.W (A2), D0
@@ -483,6 +525,31 @@ reset_channel:
 	BSET.B #channel_state_enabled, channel_state(A1)
 
 	MOVEM.L (A7)+, D0-D1/A0-A2 ; restore registers
+	RTS
+
+;;; Generic routine for loading values from tables of form
+;;; num_entries:byte
+;;; entry_length:byte, entry_data:(length+1 bytes)
+;;; Takes D1 -> record idx, D2 -> packed pointer to table,
+;;;       A0 -> song data.
+;;; Returns pointer to record in A2.  Modifies D1,D2,A2.
+load_table_entry:
+	ASL.W #2, D2
+	MOVE.W D2, A2
+	MOVE A0, D2
+	ADD.L D2, A2
+	MOVEQ #0, D2
+	ADDQ #1, A2		; skip length of table.
+	;; find our entry in the table.
+	SUBQ #1, D1
+	BEQ .lookup_finished
+	SUBQ #1, D1
+.next_entry:
+	MOVE.B (A2), D2
+	ADDQ #2, D2
+	ADD D2, A2
+	DBF D1, .next_entry
+.lookup_finished:
 	RTS
 
 
@@ -502,7 +569,9 @@ note_to_ymval_xlate:
 ;;; GLOBAL VARIABLES
 	BSS
 
+	ALIGN 2
 song_status:	DS.B song_status_size
+	ALIGN 2
 channel_status:	DS.B channel_status_size*number_of_channels
 
 ;;; EOF

@@ -106,9 +106,8 @@ Channel commands:
 		pitch envelope.  0 = disable pitch envelope.
 	1100 1010
 		slur to next note.
-	1100 1011 dddd ssss
-		vibrato.
-		d = depth; s = speed.
+	1100 1011 vvvv vvvv
+		vibrato.  0 = disable vibrato.
 
 
 Arpeggio and venv tables: (long aligned)
