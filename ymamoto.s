@@ -157,16 +157,61 @@ update_channel:
 
 
 	;; channel command
+	;; XXX: I think there are enough of these that we should just
+	;; use a jump table.
 	MOVE.W D1, D2
 	LSR.W #8, D2
 	AND.B #$3F, D2
+	BNE .arpeggio_command
+	;; XXX reserved
+	BRA .unknown_channel_command
 .arpeggio_command:
-	BNE .unknown_channel_command
+	CMP.B #1, D2
+	BNE .volume_command
 	;; if the arp value in D1 is 0, disable arpeggiation.
 	;; otherwise, set the arp bit in channel status.
 	MOVE.B D1, channel_arpeggio(A1)
 	MOVE.B #0, channel_arp_position(A1)
 
+	BRA .load_new_command
+
+	;; here: detune also
+.volume_command:
+	CMP.B #3, D2
+	BNE .venv_command
+	MOVE.B D1, channel_current_volume(A1)
+	BRA .load_new_command
+
+.venv_command:
+	CMP.B #4, D2
+	BNE .noise_command
+	BRA .load_new_command
+
+.noise_command:
+	CMP.B #5, D2
+	BNE .env_follow_command
+	BRA .load_new_command
+
+	;; 6 -> AM sample playback (reserved)
+	;; 7 -> hardware envelope (reserved)
+.env_follow_command:
+	CMP.B #8, D2
+	BNE .pitch_env_command
+	BRA .load_new_command
+
+.pitch_env_command:
+	CMP.B #9, D2
+	BNE .slur_command
+	BRA .load_new_command
+
+.slur_command:
+	CMP.B #10, D2
+	BNE. vibrato_command
+	BRA .load_new_command
+
+.vibrato_command:
+	CMP.B #11, D2
+	BNE .unknown_channel_command
 	BRA .load_new_command
 
 .unknown_channel_command:
@@ -221,7 +266,9 @@ update_channel:
 	MOVEQ #8, D3
 	ADD.B D0, D3
 	MOVE.B D3, (A3)
-	MOVE.B #$0C, 2(A3)	; volume C
+	MOVE.B channel_current_volume(A1), D3
+	;; XXX:	should add in envelope state
+	MOVE.B D3, 2(A3)
 
 	;; unmute this channel
 	MOVEQ #7, D3
