@@ -14,6 +14,8 @@ am more familiar with the ST and the YM.
 So, YMamoto, when finished, should be suitable at least for music
 disks and parts of demos where cycles aren't too scarce.
 
+You may need the m68k-atari-mint binutils to compile this.
+
 
 		   USING YMAMOTO IN ANOTHER PROGRAM
 
