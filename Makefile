@@ -12,5 +12,5 @@ all: ymamoto.bin playtest.prg
 ymamoto.bin: sc68-replay.o ymamoto.o
 	m68k-atari-mint-ld --oformat binary -Ttext 0x8000 $^ -o $@
 
-playtest.prg: playtest.o ymamoto.o
+playtest.prg: playtest.o ymamoto.o sine-oscillator.o
 	m68k-atari-mint-ld $(LD_OPTIONS) $^ -o $@

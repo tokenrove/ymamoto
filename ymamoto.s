@@ -1,6 +1,6 @@
 /*
  * YMamoto - a playback routine for the Atari ST
- * Julian Squires / 2004
+ * Julian Squires / 2004-2005
  *
  * See the README file for the broad strokes.
  * 
@@ -92,16 +92,13 @@ channel_state_first_frame = 4	| tentative.
 
 | FUNCTIONS
 
-        .global ymamoto_init
-        .global ymamoto_reset
-        .global ymamoto_update
         .text
 
 | ymamoto_init (a0 = song pointer, d0 = track to setup.)
+        .global ymamoto_init
 ymamoto_init:
 	MOVEM.L D0-D1/A0-A2, -(A7)
-
-        JSR ymamoto_reset
+        BSR ymamoto_reset
 
 	|| FIXME verify that the supplied track is not out of bounds.
 
@@ -129,9 +126,9 @@ ymamoto_init:
 
 /* Sets up the YM with some sane values so that when we leave,
  * we don't have horrible screaming chip noise. */
+        .global ymamoto_reset
 ymamoto_reset:
 	|| Reset YM.
-	MOVEA.L #0xFF8800, A1
 	MOVE.B #7, 0xFF8800
 	MOVE.B #0xFF, 0xFF8802
 	MOVE.B #8, 0xFF8800
@@ -144,17 +141,18 @@ ymamoto_reset:
 
 
 || ymamoto_update: call once per frame, a0 = song pointer.
+        .global ymamoto_update
 ymamoto_update:
 	MOVEM.L D0-D6/A0-A1, -(A7)
 	LEA song_status, A1
 	MOVE.B #13-1, song_registers_to_write(A1)
 
 	MOVEQ #0, D0
-	JSR update_channel
+	BSR update_channel
 	MOVEQ #1, D0
-	JSR update_channel
+	BSR update_channel
 	MOVEQ #2, D0
-	JSR update_channel
+	BSR update_channel
 
 	MOVE.B song_registers_to_write(A1), D0
 	MOVEQ #0, D1
@@ -182,7 +180,7 @@ update_channel:
 	LEA song_ym_shadow(A1), A3
 
         MOVEQ #0, D1        | This is a workaround for uncaught bugs
-        MOVEQ #0, D2        | below.
+        MOVEQ #0, D2        | below.  XXX
         MOVEQ #0, D3
         MOVEQ #0, D4
 
@@ -254,6 +252,7 @@ command_jump_table_len = (. - .command_jump_table)/4
 	BRA .load_new_command
 
 .noise_command:
+        | XXX unimplemented
 	BRA .load_new_command
 
 .env_follow_command:
@@ -270,9 +269,11 @@ command_jump_table_len = (. - .command_jump_table)/4
 	BRA .load_new_command
 
 .pitch_env_command:
+        | XXX unimplemented
 	BRA .load_new_command
 
 .slur_command:
+        | XXX unimplemented
 	BRA .load_new_command
 
 .vibrato_command:
@@ -379,12 +380,11 @@ command_jump_table_len = (. - .command_jump_table)/4
 	MOVE.W song_data_arpeggio_pointer(A0), D2
 	BSR load_table_entry
 	MOVE.B channel_arp_position(A1), D2
-	|| load length| if arp position greater than length,
-	|| reset to loop point.
+	
 	MOVE.B arpeggio_length(A2), D1
-	CMP.B D2, D1
+	CMP.B D2, D1            | if arp position greater than length,
 	BGT .arp_update_note
-	MOVE.B arpeggio_loop(A2), D2
+	MOVE.B arpeggio_loop(A2), D2  | ... reset to loop point.
 .arp_update_note:
 	|| load arp delta, update playing note.
 	MOVE.B arpeggio_data(A2,D2), D1
@@ -456,7 +456,6 @@ command_jump_table_len = (. - .command_jump_table)/4
 .update_hw_envelope:
 	BTST.B #channel_state_env_follow, channel_state(A1)
 	BEQ .set_frequency	| ... or next effect.
-        BRA .set_frequency      | XXX QUICKFIX
 	MOVE.W D3, D1		| D1 <- current frequency.
 	MOVE.B channel_env_shift(A1), D2
 	LSR.W D2, D1
@@ -505,10 +504,10 @@ command_jump_table_len = (. - .command_jump_table)/4
 .set_volume:
 	BTST.B #channel_state_env_follow, channel_state(A1)
 	BEQ .store_volume
-        BRA .store_volume       | XXX: QUICKFIX
 	OR.B #0x10, D3		| Envelope on.
 .store_volume:
-	MOVE.B D3, 8(A3,D0)
+	|MOVE.B D3, 8(A3,D0)
+	MOVE.B #0xF, 8(A3,D0)
 
 .update_end:	
 	MOVEM.L (A7)+, A0-A4 | restore registers
@@ -527,7 +526,7 @@ reset_channel:
 	SUBQ.W #1, D1
 	LSL.B #1, D1
 	MOVE.W song_data_track_ptrs(A0,D1), D1
-	ASL.W #2, D1		| XXX: should be .L?
+	ASL.L #2, D1		| XXX: should be .L?
 	LEA.L track_data_channel_ptr(A0,D1), A2
 
 	|| load appropriate channel status structure.
@@ -548,7 +547,7 @@ reset_channel:
 
 	|| setup data pointer.
 	MOVE.W (A2), D0
-	ASL.W #2, D0
+	ASL.L #2, D0
 	ADD.L A0, D0
 	MOVE.L D0, channel_data_ptr(A1)
 
@@ -566,7 +565,7 @@ reset_channel:
  *       A0 -> song data.
  * Returns pointer to record in A2.  Modifies D1,D2,A2. */
 load_table_entry:
-	ASL.W #2, D2
+	ASL.L #2, D2
 	MOVE.W D2, A2
 	MOVE A0, D2
 	ADD.L D2, A2
@@ -603,9 +602,8 @@ note_to_ymval_xlate:
 |       Don't put these in BSS!  The sc68 replay will be broken.
 
 	ALIGN 2
-song_status:	DS.B song_status_size
-	ALIGN 2
 channel_status:	DS.B channel_status_size*number_of_channels
-        DS.B channel_status_size
+	ALIGN 2
+song_status:	DS.B song_status_size
 
 | vim:syn=gnuas68k
