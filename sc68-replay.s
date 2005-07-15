@@ -1,9 +1,8 @@
 
-        .extern ymamoto_init
-        .extern ymamoto_update
+        extern ymamoto_init, ymamoto_update
 
-        .text
-        .global _start
+        section text
+        global _start
 _start: jmp ymamoto_init
         rts
         jmp ymamoto_update
