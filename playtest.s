@@ -31,21 +31,21 @@ timer_b_vector = $120
 super_main:
         MOVEM.L D0-D7/A0-A1, -(SP)
         BSR init
-.0:     CMP.B #$39, $FFFC02	; The ol' hit-space-to-continue bit.
+.0:     CMPI.B #$39, $FFFC02	; The ol' hit-space-to-continue bit.
 	BNE .0
         BSR shutdown
         MOVEM.L (SP)+, D0-D7/A0-A1
         RTS
 
 
-init:   BTST #1, $FFFC00       ; ACIA Tx buffer full?
+init:   BTST #1, $FFFC00	; ACIA Tx buffer full?
         BEQ init
-        MOVE.B #$12, $FFFC02  ; I *hate* mice.
+        MOVE.B #$12, $FFFC02	; I *hate* mice.
         MOVE.B #0, $FFFC00
 
         ; Setup music playback routine.
         LEA tune_data, A0
-        MOVEQ #0, D0
+        MOVEQ #1, D0
         BSR ymamoto_init
 
         ; Save system palette.
@@ -79,7 +79,7 @@ init:   BTST #1, $FFFC00       ; ACIA Tx buffer full?
         MOVE.L hbl_vector, (A0)+
         MOVE.L vbl_vector, (A0)+
         MOVE.L timer_b_vector, (A0)+
-        MOVE.B $FFFA07, (A0)+  ; Timers.
+        MOVE.B $FFFA07, (A0)+	; Timers.
         MOVE.B $FFFA09, (A0)+
         MOVE.B $FFFA15, (A0)+
         MOVE.B $FFFA17, (A0)+
@@ -159,12 +159,12 @@ raster_bars_vbl:
         MOVE.W D0, bar_b_y
 
         ; Setup scanline/hblank routine.
-        CLR.B $FFFA1B          ; Disable timer B.
+        CLR.B $FFFA1B		; Disable timer B.
         MOVE.B bar_a_y+1, $FFFA21
         MOVE.L #scanline_bar_a, timer_b_vector
-        MOVE.B #$18, $FFFA1B     ; Enable timer B (event mode).
-        BSET #0, $FFFA07       ; intA enable timer B.
-        BSET #0, $FFFA13       ; intA mask, unmask timer B.
+        MOVE.B #$18, $FFFA1B	; Enable timer B (event mode).
+        BSET #0, $FFFA07	; intA enable timer B.
+        BSET #0, $FFFA13	; intA mask, unmask timer B.
 
         MOVE.W bar_a_y, scanline
         MOVE.W #$310, next_palette_value
@@ -290,6 +290,7 @@ update_scrolly:
 
         GLOBAL plot_debug_dword
 plot_debug_dword:
+	MOVEM.L D0-D2/A0-A2, -(SP)
         LEA debug_string_buf, A2
 
         LEA hex_xlat, A1
@@ -302,6 +303,7 @@ plot_debug_dword:
         MOVE.B #0, (A2)+
         LEA debug_string_buf, A2
         BSR plot_debug_string
+	MOVEM.L (SP)+, D0-D2/A0-A2
         RTS
 
 
@@ -326,8 +328,8 @@ plot_debug_string:
         BRA .0
 .3:     ADDQ.L #7, A0
         BRA .0
-
 .1:     RTS
+
 
 	section bss
         align 4
@@ -348,7 +350,7 @@ debug_string_buf: ds.b 10
 
         section data
         align 4
-tune_data: incbin "demo-y.bin"
+tune_data: incbin "ch-1.bin"
 one_bpp_font: incbin "readable.f08"
 scroll_text: DC.B "The mandatory scrolltext...  tek speaking.  Yes, it's unbelievable that I'm so lazy that I didn't implement any cool effects in this scrolly.  I've been struggling with these damned MiNT cross-targetted binutils for the past two weeks -- I can never be sure whether the bugs are in my code or in the tools, because each available version of the binutils produces different eccentric behavior.  Next time, I'll have all this stuff fixed, and probably will have jettisoned these fucking binutils for a real assembler/linker.  Greets?  Of course.  Greets go out to the lonely St. John's scene, such as it is -- Retsyn, Michael (you need a new handle)...  uh, and how about all the people who were sceners in some sense but then disappeared...  off the top of my head I'm thinking of mr. nemo, jason, flyer, rubix...  Anyway.  Write more code!                 "
 scroll_text_len = (. - scroll_text)

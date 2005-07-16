@@ -94,6 +94,8 @@ channel_state_first_frame = 4	; tentative.
 
         SECTION text
 
+	extern plot_debug_dword
+	
 ; ymamoto_init (a0 = song pointer, d0 = track to setup.)
         GLOBAL ymamoto_init
 ymamoto_init:
@@ -144,6 +146,7 @@ ymamoto_reset:
         GLOBAL ymamoto_update
 ymamoto_update:
 	MOVEM.L D0-D6/A0-A1, -(A7)
+
 	LEA song_status, A1
 	MOVE.B #13-1, song_registers_to_write(A1)
 
@@ -153,7 +156,7 @@ ymamoto_update:
 	BSR update_channel
 	MOVEQ #2, D0
 	BSR update_channel
-
+	
 	MOVE.B song_registers_to_write(A1), D0
 	MOVEQ #0, D1
 	MOVEQ #0, D2
@@ -173,22 +176,17 @@ ymamoto_update:
  * update_channel: expects the song data pointer in A0, and the channel
  * index in D0.
 update_channel:
-	MOVEM.L A0-A4, -(A7)  ; save registers... don't bother with Dx
+	MOVEM.L A1-A4, -(A7)  ; save registers... don't bother with Dx
 			      ; because they're saved in ymamoto_update. 
 
 	LEA song_status, A1
 	LEA song_ym_shadow(A1), A3
 
-        MOVEQ #0, D1        ; This is a workaround for uncaught bugs
-        MOVEQ #0, D2        ; below.  XXX
-        MOVEQ #0, D3
-        MOVEQ #0, D4
-
 	;; load channel status ptr into A1
 	LEA channel_status, A1
-	MOVE.B D0, D1
+	MOVE.W D0, D1
 	BEQ .channel_status_loaded
-	SUBQ.B #1, D1
+	SUBQ.W #1, D1
 .next_channel_status:
 	ADD.L #channel_status_size, A1
 	DBEQ D1, .next_channel_status
@@ -399,6 +397,7 @@ command_jump_table_len = (. - .command_jump_table)/4
 	; Frequency value effects.
 .lookup_frequency:
 	LEA note_to_ymval_xlate, A2
+	EXT.W D3
 	ADD.W D3,D3
 	MOVE.W (A2,D3), D3
 
@@ -477,7 +476,7 @@ command_jump_table_len = (. - .command_jump_table)/4
 	ADD.B D0, D1
 	MOVE.B D3, (A3,D1)
 
-	LSR.L #8, D3
+	LSR.W #8, D3
 	MOVEQ #1, D1
 	ADD.B D0, D1
 	ADD.B D0, D1
@@ -511,7 +510,7 @@ command_jump_table_len = (. - .command_jump_table)/4
 	MOVE.B D3, 8(A3,D0)
 
 .update_end:	
-	MOVEM.L (A7)+, A0-A4 ; restore registers
+	MOVEM.L (SP)+, A1-A4
 	RTS
 ;;; End of main playroutine.
 
@@ -524,11 +523,11 @@ reset_channel:
 	LEA song_status, A1
 	MOVEQ #0, D1
 	MOVE.B song_current_track(A1), D1
-	SUBQ.W #1, D1
+	SUBQ.B #1, D1
 	LSL.B #1, D1
 	MOVE.W song_data_track_ptrs(A0,D1), D1
 	ASL.L #2, D1		; XXX: should be .L?
-	LEA.L track_data_channel_ptr(A0,D1), A2
+	LEA.L track_data_channel_ptr(A0,D1.L), A2
 
 	;; load appropriate channel status structure.
 	LEA channel_status, A1
@@ -540,6 +539,7 @@ reset_channel:
 .l2:
 
 	;; wipe channel status structure first.
+	MOVEQ #0, D0
 	MOVE.L D0, 0(A1)
 	MOVE.L D0, 4(A1)
 	MOVE.L D0, 8(A1)
