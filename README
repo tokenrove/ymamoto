@@ -14,13 +14,11 @@ am more familiar with the ST and the YM.
 So, YMamoto, when finished, should be suitable at least for music
 disks and parts of demos where cycles aren't too scarce.
 
-You may need the m68k-atari-mint binutils to compile this.
-
 
 		   USING YMAMOTO IN ANOTHER PROGRAM
 
 Call ymamoto_init with A0 pointing to the song data, and D0 set to the
-track index to play.
+track index to play.  Note that the first track index is 1, not 0.
 
 Call ymamoto_update once per frame until it returns $FFFF in D0.
 
@@ -42,7 +40,7 @@ pointer to arpeggio table (word, relative, >>2)
 pointer to volume envelope table (word, relative, >>2)
 pointer to vibrato table (word, relative, >>2)
 number of tracks (byte)
-	Should always be >1.
+	Should always be >=1.
 offset to track 0 (word, relative, >>2)
 offset to track ...
 
@@ -73,7 +71,7 @@ Global commands: (can occur in any channel; need only occur once)
 	10rr rccc  xxxx xxxx
 		r => reserved.
 		c =>
-every track must end  \	000 => track end
+every track must end  \	000 => track end (not followed by any data)
 with one of these.    / 001 => track loop
                         010 => trigger external event
 		x => command data

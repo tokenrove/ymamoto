@@ -11,7 +11,7 @@
 
         global reset_sine_oscillator
 reset_sine_oscillator:
-        MOVE.W #256, cosine ; Fairly arbitrary max amplitude.
+        MOVE.W #$100, cosine ; Fairly arbitrary max amplitude.
         MOVE.W #0, sine
         RTS
 

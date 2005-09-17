@@ -2,9 +2,6 @@
  * Simple ST application to playback YMamoto tunes.
  * This is based on some simple code that Michael Bricout gave me.
  * 
- * Also, this is tweaked to work with GNU as, which means that
- * it's not only my fault that the style is ugly.
- *
  * Julian Squires <tek@wiw.org> / 2004-2005
  *
 
@@ -355,3 +352,4 @@ one_bpp_font: incbin "readable.f08"
 scroll_text: DC.B "The mandatory scrolltext...  tek speaking.  Yes, it's unbelievable that I'm so lazy that I didn't implement any cool effects in this scrolly.  I've been struggling with these damned MiNT cross-targetted binutils for the past two weeks -- I can never be sure whether the bugs are in my code or in the tools, because each available version of the binutils produces different eccentric behavior.  Next time, I'll have all this stuff fixed, and probably will have jettisoned these fucking binutils for a real assembler/linker.  Greets?  Of course.  Greets go out to the lonely St. John's scene, such as it is -- Retsyn, Michael (you need a new handle)...  uh, and how about all the people who were sceners in some sense but then disappeared...  off the top of my head I'm thinking of mr. nemo, jason, flyer, rubix...  Anyway.  Write more code!                 "
 scroll_text_len = (. - scroll_text)
 hex_xlat: DC.B "0123456789abcdef"
+ * vim:syn=asm68k

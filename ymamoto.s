@@ -23,12 +23,6 @@
 ;;  CONSTANT SYMBOLS
 
 number_of_channels = 3
- * This playback /was/ dependant on this value, but now all durations
- * are fixed cycles, so to change this, you should really just
- * recompile the songs with mumble.  I don't think there's any reason
- * this is here anymore, except to provide something to attach to
- * this historical note.
-playback_frequency = 50		; Hertz
 
 	;; song data structure
 song_data_arpeggio_pointer = 0
@@ -102,6 +96,8 @@ ymamoto_init:
 	MOVEM.L D0-D1/A0-A2, -(A7)
         BSR ymamoto_reset
 
+        MOVE.L A0, songptr
+
 	;; FIXME verify that the supplied track is not out of bounds.
 
 	;; setup pointers: channels for this track, tables.
@@ -142,11 +138,12 @@ ymamoto_reset:
         RTS
 
 
-;; ymamoto_update: call once per frame, a0 = song pointer.
+;; ymamoto_update: call once per frame.
         GLOBAL ymamoto_update
 ymamoto_update:
 	MOVEM.L D0-D6/A0-A1, -(A7)
 
+        MOVE.L songptr, A0
 	LEA song_status, A1
 	MOVE.B #13-1, song_registers_to_write(A1)
 
@@ -208,7 +205,7 @@ update_channel:
 	MOVE.W (A2)+, D1
 	BPL .process_new_note
 	;; otherwise, this is a command.
-	BTST #14, D1
+	BTST.L #14, D1
 	BEQ .global_command
 
 
@@ -254,7 +251,6 @@ command_jump_table_len = (. - .command_jump_table)/4
 	BRA .load_new_command
 
 .env_follow_command:
-	BRA .load_new_command	; XXX HACK TEST
 	BTST.B #0, D1
 	BEQ .disable_env_follow
 	BSET.B #channel_state_env_follow, channel_state(A1)
@@ -300,9 +296,14 @@ command_jump_table_len = (. - .command_jump_table)/4
 .track_loop_command:
 	CMP.B #1, D2
 	BNE .trigger_command
-	BSR reset_channel
+        MOVE.L songptr, A0
+        MOVE.B #1, D0
+        BSR ymamoto_init
+        BRA .update_end
+        ;; XXX below unused, potentially flaky
 	MOVEQ #0, D2
 	MOVE.W (A2)+, D2
+	BSR reset_channel
 	ADD.W D2, D2
 	ADD.L D2, channel_data_ptr(A1)
 	MOVEA.L channel_data_ptr(A1), A2
@@ -466,7 +467,7 @@ command_jump_table_len = (. - .command_jump_table)/4
 	MOVE.B D1, $C(A3)	; Env rough adjustment.
 	BTST.B #channel_state_first_frame, channel_state(A1)
 	BEQ .set_frequency	; only update on first frame of note.
-	MOVE.B #$E, $D(A3)	; Env shape: CONT;ATT;ALT
+	MOVE.B #$E, $D(A3)	; Env shape: CONT;ATT
 	LEA song_status, A2
 	MOVE.B #14-1, song_registers_to_write(A2)
 
@@ -481,7 +482,6 @@ command_jump_table_len = (. - .command_jump_table)/4
 	ADD.B D0, D1
 	ADD.B D0, D1
 	MOVE.B D3, (A3,D1)
-
 
 	;; Volume effects.
 .lookup_volume:
@@ -515,9 +515,12 @@ command_jump_table_len = (. - .command_jump_table)/4
 ;;; End of main playroutine.
 
 
-	;; Takes D0 = channel number, A0 = song ptr.
+	;; Takes D0 = channel number.
+        ;; Returns channel status pointer in A1.
 reset_channel:
-	MOVEM.L D0-D1/A0-A2, -(A7) ; save registers
+	MOVEM.L D0-D1/A0/A2, -(A7) ; save registers
+
+        MOVE.L songptr, A0
 
 	;; load appropriate track address.
 	LEA song_status, A1
@@ -555,7 +558,7 @@ reset_channel:
 	;; enable channel.
 	BSET.B #channel_state_enabled, channel_state(A1)
 
-	MOVEM.L (A7)+, D0-D1/A0-A2 ; restore registers
+	MOVEM.L (A7)+, D0-D1/A0/A2 ; restore registers
 	RTS
 
 
@@ -600,10 +603,14 @@ note_to_ymval_xlate:
 
 
 ; GLOBAL VARIABLES
-;       Don't put these in BSS!  The sc68 replay will be broken.
+
+        SECTION BSS
 
 	EVEN
 channel_status:	DS.B channel_status_size*number_of_channels
 	EVEN
 song_status:	DS.B song_status_size
+        EVEN
+songptr: DS.L 1
 
+ * vim:syn=asm68k
